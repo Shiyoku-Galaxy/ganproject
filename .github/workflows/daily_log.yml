@@ -1,28 +1,26 @@
 name: Daily Log Generator
 
 on:
+  workflow_dispatch:    # ← Actions画面から「Run workflow」ボタンで手動起動
   schedule:
-    - cron:  '0 21 * * *'   # UTC 21:00 = JST 06:00
-  workflow_dispatch:        # 手動実行ボタン
-
-permissions:
-  contents: write           # 自動コミットに必要
+    - cron: '0 21 * * *'  # ← UTCで設定。JST 06:00 相当（UTC+9）
+  push:                  # ← 関連ファイルをpushしたときにも動く
+    paths:
+      - 'generators/**'
+      - '.github/workflows/daily_log.yml'
 
 jobs:
-  generate:
+  build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Run generator
-        run: |
-          python generators/make_daily_log.py
+      - name: Generate daily log
+        run: python generators/make_daily_log.py
 
       - name: Auto-commit changes
         uses: stefanzweifel/git-auto-commit-action@v5
