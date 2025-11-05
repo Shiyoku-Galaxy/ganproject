@@ -1,0 +1,31 @@
+name: Daily Log Generator
+
+on:
+  schedule:
+    - cron:  '0 21 * * *'   # UTC 21:00 = JST 06:00
+  workflow_dispatch:        # 手動実行ボタン
+
+permissions:
+  contents: write           # 自動コミットに必要
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run generator
+        run: |
+          python generators/make_daily_log.py
+
+      - name: Auto-commit changes
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore(auto): generate daily log"
+          file_pattern: "docs/**"
