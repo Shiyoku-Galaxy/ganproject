@@ -4,14 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       date:
-        description: 'YYYY-MM-DD（任意。空なら今日）'
+        description: "YYYY-MM-DD（省略時は今日）"
         required: false
   schedule:
-    - cron: '00 21 * * *'  # UTC 21:00 = JST 06:00 毎朝
-  push:
-    paths:
-      - 'generators/**'
-      - '.github/workflows/daily_log.yml'
+    - cron: '0 21 * * *'  # 毎日06:00 JST=21:00 UTC
 
 permissions:
   contents: write
@@ -26,7 +22,12 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Ensure output dir
+        run: mkdir -p docs/daily
+
       - name: Run generator
+        env:
+          INPUT_DATE: ${{ inputs.date }}
         run: |
           python generators/make_daily_log.py "${{ inputs.date }}"
 
