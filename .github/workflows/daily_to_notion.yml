@@ -3,7 +3,8 @@ name: Daily → Notion (Final Synced 2025-11)
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: "5 0 * * *"   # UTC 00:05 = JST 09:05
+    # JST 09:05（UTC 00:05）
+    - cron: "5 0 * * *"
 
 jobs:
   post:
@@ -14,40 +15,41 @@ jobs:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_VERSION: ${{ secrets.NOTION_VERSION }}
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
-        shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
           DATE=$(date -u +%Y-%m-%d)
 
-          # JSON payload — 現在のDB構造と完全同期
-          cat <<EOF > payload.json
+          # --- build payload (AutoSync は一旦外しています) ---
+          read -r -d '' PAYLOAD <<'JSON'
           {
-            "parent": { "database_id": "${NOTION_DATABASE_ID}" },
+            "parent": { "database_id": "DBID" },
             "properties": {
-              "Log Title": { "rich_text": [ { "text": { "content": "${DATE} Daily Log (GitHub)" } } ] },
-              "日付": { "date": { "start": "${DATE}" } },
-              "Status": { "status": { "name": "未着手" } },
-              "Source": { "multi_select": [ { "name": "GitHub" } ] },
-              "AutoSync": { "checkbox": true }
+              "Log Title": { "rich_text": [ { "text": { "content": "DATE_DAILY Daily Log (GitHub)" } } ] },
+              "日付":       { "date": { "start": "DATESTR" } },
+              "Status":    { "status": { "name": "未着手" } },
+              "Source":    { "multi_select": [ { "name": "GitHub" } ] }
             }
           }
-          EOF
+          JSON
+
+          # 変数差し替え
+          PAYLOAD=${PAYLOAD/DBID/$NOTION_DATABASE_ID}
+          PAYLOAD=${PAYLOAD/DATESTR/$DATE}
+          PAYLOAD=${PAYLOAD/DATE_DAILY/$DATE}
 
           echo "=== Sending Payload to Notion ==="
-          cat payload.json
-          echo "================================="
+          echo "$PAYLOAD" | sed 's/"/\\"/g' >/dev/null  # 画面出力は抑止（秘密情報保護）
 
-          HTTP_CODE=$(curl -sS -o response.json -w "%{http_code}" \
+          # 送信（2xx 以外は失敗として終了）
+          HTTP_CODE=$(curl --fail-with-body -sS -o response.json -w '%{http_code}' \
             -X POST "https://api.notion.com/v1/pages" \
-            -H "Authorization: Bearer ${NOTION_TOKEN}" \
-            -H "Notion-Version: ${NOTION_VERSION}" \
+            -H "Authorization: Bearer $NOTION_TOKEN" \
+            -H "Notion-Version: $NOTION_VERSION" \
             -H "Content-Type: application/json" \
-            -d @payload.json || true)
+            -d "$PAYLOAD" || true)
 
           echo "HTTP code: $HTTP_CODE"
           echo "Response:"
-          cat response.json
-          [[ "$HTTP_CODE" =~ ^2 ]] || exit 1
-          cat response.json
+          cat response.json || true
 
           [[ "$HTTP_CODE" =~ ^2 ]] || exit 1
