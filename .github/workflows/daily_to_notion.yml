@@ -1,0 +1,41 @@
+name: Daily → Notion
+
+on:
+  workflow_dispatch: {}           # 手動実行ボタン
+  schedule:
+    - cron: "5 0 * * *"           # UTC 00:05 (= JST 09:05)
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post a daily log to Notion DB
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_VERSION: ${{ secrets.NOTION_VERSION }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+        run: |
+          DATE=$(date -u +%Y-%m-%d)
+
+          read -r -d '' PAYLOAD <<'JSON'
+          {
+            "parent": { "database_id": "DBID" },
+            "properties": {
+              "Log Title": { "title": [ { "text": { "content": "TITLE" } } ] },
+              "Date":      { "date":  { "start": "DATESTR" } },
+              "Status":    { "status": { "name": "Open" } },
+              "Source":    { "select": { "name": "GitHub" } },
+              "AutoSync":  { "checkbox": true }
+            }
+          }
+          JSON
+
+          PAYLOAD=${PAYLOAD/DBID/$NOTION_DATABASE_ID}
+          PAYLOAD=${PAYLOAD/TITLE/"$DATE Daily Log (GitHub)"}
+          PAYLOAD=${PAYLOAD/DATESTR/$DATE}
+
+          curl -sS -X POST "https://api.notion.com/v1/pages" \
+            -H "Authorization: Bearer $NOTION_TOKEN" \
+            -H "Notion-Version: $NOTION_VERSION" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD"
