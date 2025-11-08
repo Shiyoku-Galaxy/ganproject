@@ -3,10 +3,7 @@ name: Daily → Notion (Final Synced 2025-11)
 on:
   workflow_dispatch: {}
   schedule:
-    # UTC 00:05（JST 09:05）
-    - cron: "5 0 * * *"
-
-permissions: {}
+    - cron: "5 0 * * *"   # UTC 00:05（JST 09:05）
 
 jobs:
   post:
@@ -14,58 +11,86 @@ jobs:
     steps:
       - name: Post a daily log to Notion DB (auto-detect title key)
         env:
-          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_TOKEN:   ${{ secrets.NOTION_TOKEN }}
           NOTION_VERSION: ${{ secrets.NOTION_VERSION }}
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+        shell: bash
         run: |
           set -euo pipefail
           DATE=$(date -u +%Y-%m-%d)
 
-          # 1) DBのタイトル列キーをAPIで自動取得（Actionsランナーにはjqが入っています）
-          TITLE_KEY=$(
-            curl -sS \
-              -H "Authorization: Bearer $NOTION_TOKEN" \
-              -H "Notion-Version: $NOTION_VERSION" \
-              "https://api.notion.com/v1/databases/$NOTION_DATABASE_ID" \
-            | jq -r '.properties | to_entries[] | select(.value.type=="title") | .key'
-          )
-          echo "TITLE_KEY=${TITLE_KEY}"
-          export TITLE_KEY
+          echo "== 0) Sanity check secrets =="
+          test -n "${NOTION_TOKEN}" || { echo "NOTION_TOKEN is empty"; exit 1; }
+          test -n "${NOTION_VERSION}" || { echo "NOTION_VERSION is empty"; exit 1; }
+          test -n "${NOTION_DATABASE_ID}" || { echo "NOTION_DATABASE_ID is empty"; exit 1; }
 
-          # 2) 送信用JSON（プロパティ名はあなたのDBに合わせています：日付/Status/Source）
-          #    タイトル列名は自動検出した TITLE_KEY を使用
+          echo "== 1) GET DB meta to detect title key =="
+          curl -sS \
+            -H "Authorization: Bearer ${NOTION_TOKEN}" \
+            -H "Notion-Version: ${NOTION_VERSION}" \
+            "https://api.notion.com/v1/databases/${NOTION_DATABASE_ID}" \
+            -o dbmeta.json || true
+
+          # 失敗時の人間向け診断
+          if ! jq -e .object dbmeta.json >/dev/null 2>&1; then
+            echo "!! Notion API response is not JSON"; cat dbmeta.json || true; exit 1
+          fi
+
+          OBJ=$(jq -r '.object' dbmeta.json)
+          if [ "$OBJ" = "error" ]; then
+            echo "!! Notion returned error on GET /databases:"
+            cat dbmeta.json
+            echo
+            echo "対処: 1) NotionのGAN_Logs_DBページで右上「…」→ Connect to から、このインテグレーションを接続"
+            echo "     2) NOTION_DATABASE_ID が正しいか再確認（URL末尾のID、ハイフン除去）"
+            exit 1
+          fi
+
+          # タイトル列キーを抽出（type=="title" のプロパティ名）
+          TITLE_KEY=$(jq -r '.properties | to_entries[] | select(.value.type=="title") | .key' dbmeta.json | head -n1)
+          if [ -z "${TITLE_KEY:-}" ] || [ "${TITLE_KEY}" = "null" ]; then
+            echo "!! タイトル列が検出できません。dbmeta.json を表示します（タイトル列は type: \"title\" です）"
+            jq . dbmeta.json | sed -e 's/\"/\\\"/g' >/dev/null || true
+            cat dbmeta.json
+            exit 1
+          fi
+          echo "TITLE_KEY=${TITLE_KEY}"
+
+          echo "== 2) Build payload (あなたのDB名に合わせたキー: 日付/Status/Source) =="
+          # 注意: ここはあなたのプロパティ表示名と一致させる
+          #   ・日付列 … 「日付」(Date)
+          #   ・ステータス … 「Status」（ステータス型で Open/進行中/完了 など）
+          #   ・Source … 「Source」（マルチセレクトで GitHub など）
           jq -n \
-            --arg dbid  "$NOTION_DATABASE_ID" \
-            --arg date  "$DATE" \
-            --arg title "$DATE Daily Log (GitHub)" \
-            '
+            --arg dbid  "${NOTION_DATABASE_ID}" \
+            --arg date  "${DATE}" \
+            --arg title "${DATE} Daily Log (GitHub)" \
+            --arg TITLE_KEY "${TITLE_KEY}" '
             {
               parent: { database_id: $dbid },
-              properties:
-                {
-                  "日付":    { "date":   { "start": $date } },
-                  "Status":  { "status": { "name": "未着手" } },
-                  "Source":  { "multi_select": [ { "name": "GitHub" } ] }
-                }
+              properties: {
+                "日付":    { "date": { "start": $date } },
+                "Status": { "status": { "name": "未着手" } },
+                "Source": { "multi_select": [ { "name": "GitHub" } ] }
+              }
             } as $base
             | $base
-            | .properties[env.TITLE_KEY] = { "title": [ { "text": { "content": $title } } ] }
-            ' > payload.json
+            | .properties[$TITLE_KEY] = { "title": [ { "text": { "content": $title } } ] }
+          ' > payload.json
 
-          echo "=== Sending Payload to Notion ==="
-          # レスポンス本文はresponse.jsonに保存し、HTTPコードで成否判定
+          echo "== 3) POST /v1/pages =="
           HTTP_CODE=$(
             curl --fail-with-body -sS -o response.json -w '%{http_code}' \
               -X POST "https://api.notion.com/v1/pages" \
-              -H "Authorization: Bearer $NOTION_TOKEN" \
-              -H "Notion-Version: $NOTION_VERSION" \
+              -H "Authorization: Bearer ${NOTION_TOKEN}" \
+              -H "Notion-Version: ${NOTION_VERSION}" \
               -H "Content-Type: application/json" \
               -d @payload.json || true
           )
-          echo "HTTP code: $HTTP_CODE"
+
+          echo "HTTP code: ${HTTP_CODE}"
           echo "Response:"; cat response.json || true
 
-          # 2xx 以外は失敗扱い
-          [[ "$HTTP_CODE" =~ ^2 ]] || exit 1
+          [[ "${HTTP_CODE}" =~ ^2 ]] || exit 1
 
-          [[ "$HTTP_CODE" =~ ^2 ]] || exit 1
+          echo "Done."
