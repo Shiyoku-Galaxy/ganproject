@@ -1,103 +1,64 @@
-name: Daily → Notion (Final Synced 2025-11)
+name: Daily → Notion (Final)
 
 on:
   workflow_dispatch: {}
-  schedule:
-    - cron: "5 0 * * *"  # UTC 00:05 (JST 09:05)
+  # 任意でスケジュール
+  #schedule:
+  #  - cron: '5 0 * * *'  # JST 09:05
 
 jobs:
   post:
     runs-on: ubuntu-latest
-    env:
-      NOTION_TOKEN:   ${{ secrets.NOTION_TOKEN }}
-      NOTION_VERSION: ${{ secrets.NOTION_VERSION }}
-      NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
     steps:
-      - name: Install jq
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y jq
-
-      - name: Post a daily log to Notion DB (auto-detect title key)
-        shell: bash
+      - name: Post a daily log to Notion DB (no jq, no auto-detect)
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_VERSION: ${{ secrets.NOTION_VERSION }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
         run: |
           set -euo pipefail
+
+          # 1) 日付（UTC）→ YYYY-MM-DD
           DATE=$(date -u +%Y-%m-%d)
 
-          echo "== 0) Sanity check secrets =="
-          if [[ -z "${NOTION_TOKEN:-}" || -z "${NOTION_VERSION:-}" || -z "${NOTION_DATABASE_ID:-}" ]]; then
-            echo "::error::Missing secrets (NOTION_TOKEN / NOTION_VERSION / NOTION_DATABASE_ID)"
-            exit 1
-          fi
-
-          echo "== 1) Normalize DB ID (auto-hyphenate if 32-hex) =="
-          DBID_RAW="$NOTION_DATABASE_ID"
-          if [[ "$DBID_RAW" =~ ^[0-9a-fA-F]{32}$ ]]; then
-            DBID="${DBID_RAW:0:8}-${DBID_RAW:8:4}-${DBID_RAW:12:4}-${DBID_RAW:16:4}-${DBID_RAW:20}"
-          else
-            DBID="$DBID_RAW"
-          fi
-          echo "DBID=${DBID}"
-
-          echo "== 2) GET DB meta to detect title key =="
-          HTTP_CODE=$(curl --fail-with-body -sS -o dbmeta.json -w '%{http_code}' \
-            -H "Authorization: Bearer ${NOTION_TOKEN}" \
-            -H "Notion-Version: ${NOTION_VERSION}" \
-            "https://api.notion.com/v1/databases/${DBID}") || true
-          echo "GET /v1/databases code: ${HTTP_CODE}" || true
-          cat dbmeta.json || true
-
-          if [[ "${HTTP_CODE}" != "200" ]]; then
-            echo "Response:"; cat dbmeta.json || true
-            exit 5
-          fi
-
-          TITLE_KEY=$(jq -r '
-            .properties
-            | to_entries
-            | map(select(.value.type=="title"))
-            | (.[0].key // empty)
-          ' dbmeta.json)
-
-          if [[ -z "${TITLE_KEY}" ]]; then
-            echo "::error::Title property not found. Available properties:"
-            jq -r '.properties | keys[]' dbmeta.json || true
-            exit 6
-          fi
-          echo "TITLE_KEY=${TITLE_KEY}"
-
-          echo "== 3) Build payload (あなたのDBに合わせて和名プロパティ使用) =="
-          jq -n \
-            --arg dbid  "${DBID}" \
-            --arg date  "${DATE}" \
-            --arg title "${DATE} Daily Log (GitHub)" \
-          '
+          # 2) Notion ペイロード（あなたのDB列名に直書き）
+          #    - タイトル列名: Log Title  ← スクショと同じ表記
+          #    - 日付列名: 日付
+          #    - ステータス列名: Status（値: 未着手）
+          #    - マルチセレクト列名: Source（値: GitHub）
+          #    - チェックボックス列名: AutoSync
+          read -r -d '' PAYLOAD <<'JSON'
           {
-            parent: { database_id: $dbid },
-            properties: {
-              "日付":   { "date":   { "start": $date } },
-              "Status": { "status": { "name": "未着手" } },
-              "Source": { "multi_select": [ { "name": "GitHub" } ] }
+            "parent": { "database_id": "DBID" },
+            "properties": {
+              "Log Title": { "title": [ { "text": { "content": "DATE_DAILY Daily Log (GitHub)" } } ] },
+              "日付":      { "date":  { "start": "DATESTR" } },
+              "Status":    { "status": { "name": "未着手" } },
+              "Source":    { "multi_select": [ { "name": "GitHub" } ] },
+              "AutoSync":  { "checkbox": true }
             }
           }
-          | (.properties[$ENV.TITLE_KEY] = { "title": [ { "text": { "content": $title } } ] })
-          ' > payload.json
+          JSON
 
-          echo "== 4) POST /v1/pages =="
-          HTTP_CODE=$(curl --fail-with-body -sS -o response.json -w '%{http_code}' \
-            -X POST "https://api.notion.com/v1/pages" \
-            -H "Authorization: Bearer ${NOTION_TOKEN}" \
-            -H "Notion-Version: ${NOTION_VERSION}" \
-            -H "Content-Type: application/json" \
-            -d @payload.json) || true
-          echo "POST /v1/pages code: ${HTTP_CODE}"
-          if [[ "${HTTP_CODE}" =~ ^2 ]]; then
-            echo "OK. Created page:"
-            jq -r '.url' response.json || true
-            exit 0
-          else
-            echo "Response:"; cat response.json || true
-            exit 7
-          fi
+          # 3) 置換（DBID/DATE）
+          PAYLOAD=${PAYLOAD/DBID/${NOTION_DATABASE_ID}}
+          PAYLOAD=${PAYLOAD/DATESTR/${DATE}}
+          PAYLOAD=${PAYLOAD/DATE_DAILY/${DATE}}
 
-          echo "Done."
+          echo "=== Sending Payload to Notion ==="
+          echo "$PAYLOAD" | sed 's/"Authorization": "[^"]*"/"Authorization": "***"/g' >/dev/null  # 表示抑制
+
+          # 4) 送信（2xx 以外は失敗）
+          HTTP_CODE=$(
+            curl --fail-with-body -sS -o response.json -w '%{http_code}' \
+              -X POST "https://api.notion.com/v1/pages" \
+              -H "Authorization: Bearer ${NOTION_TOKEN}" \
+              -H "Notion-Version: ${NOTION_VERSION}" \
+              -H "Content-Type: application/json" \
+              -d "$PAYLOAD" || true
+          )
+
+          echo "HTTP code: ${HTTP_CODE}"
+          echo "Response:"; cat response.json || true
+
+          [[ "${HTTP_CODE}" =~ ^2 ]] || exit 1
