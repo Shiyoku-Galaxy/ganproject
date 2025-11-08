@@ -1,43 +1,43 @@
-name: Daily → Notion (Debug Safe)
+name: Daily → Notion (Final Synced 2025-11)
 
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: "5 0 * * *"   # UTC 00:05 (= JST 09:05)
+    - cron: "5 0 * * *"   # UTC 00:05 = JST 09:05
 
 jobs:
   post:
     runs-on: ubuntu-latest
     steps:
-      - name: Post a daily log to Notion DB (debug mode)
+      - name: Post a daily log to Notion DB
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_VERSION: ${{ secrets.NOTION_VERSION }}
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
         shell: bash
         run: |
-          set -x  # デバッグ表示ON
+          set -euxo pipefail
           DATE=$(date -u +%Y-%m-%d)
 
-          # JSON組み立てを別ファイルに保存
+          # JSON payload — 現在のDB構造と完全同期
           cat <<EOF > payload.json
           {
             "parent": { "database_id": "${NOTION_DATABASE_ID}" },
             "properties": {
-              "Log Title": { "title": [ { "text": { "content": "${DATE} Daily Log (GitHub)" } } ] },
-              "Date": { "date": { "start": "${DATE}" } },
+              "Log Title": { "rich_text": [ { "text": { "content": "${DATE} Daily Log (GitHub)" } } ] },
+              "日付": { "date": { "start": "${DATE}" } },
               "Status": { "status": { "name": "未着手" } },
-              "Source": { "select": { "name": "GitHub" } },
+              "Source": { "multi_select": [ { "name": "GitHub" } ] },
               "AutoSync": { "checkbox": true }
             }
           }
           EOF
 
-          echo "=== Payload ==="
+          echo "=== Sending Payload to Notion ==="
           cat payload.json
-          echo "==============="
+          echo "================================="
 
-          HTTP_CODE=$(curl -v -sS -o response.json -w "%{http_code}" \
+          HTTP_CODE=$(curl -sS -o response.json -w "%{http_code}" \
             -X POST "https://api.notion.com/v1/pages" \
             -H "Authorization: Bearer ${NOTION_TOKEN}" \
             -H "Notion-Version: ${NOTION_VERSION}" \
@@ -46,6 +46,8 @@ jobs:
 
           echo "HTTP code: $HTTP_CODE"
           echo "Response:"
+          cat response.json
+          [[ "$HTTP_CODE" =~ ^2 ]] || exit 1
           cat response.json
 
           [[ "$HTTP_CODE" =~ ^2 ]] || exit 1
