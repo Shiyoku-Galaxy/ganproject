@@ -1,4 +1,4 @@
-name: Daily → Notion
+name: Daily → Notion (Debug Safe)
 
 on:
   workflow_dispatch: {}
@@ -9,50 +9,43 @@ jobs:
   post:
     runs-on: ubuntu-latest
     steps:
-      - name: Post a daily log to Notion DB
+      - name: Post a daily log to Notion DB (debug mode)
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_VERSION: ${{ secrets.NOTION_VERSION }}
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
         shell: bash
         run: |
-          set -euo pipefail
-
+          set -x  # デバッグ表示ON
           DATE=$(date -u +%Y-%m-%d)
 
-          # JSON payload（DBの列名に合わせています）
-          read -r -d '' PAYLOAD <<'JSON'
+          # JSON組み立てを別ファイルに保存
+          cat <<EOF > payload.json
           {
-            "parent": { "database_id": "DBID" },
+            "parent": { "database_id": "${NOTION_DATABASE_ID}" },
             "properties": {
-              "Log Title": { "title": [ { "text": { "content": "TITLE" } } ] },
-              "Date":      { "date":  { "start": "DATESTR" } },
-              "Status":    { "status": { "name": "未着手" } },
-              "Source":    { "select": { "name": "GitHub" } },
-              "AutoSync":  { "checkbox": true }
+              "Log Title": { "title": [ { "text": { "content": "${DATE} Daily Log (GitHub)" } } ] },
+              "Date": { "date": { "start": "${DATE}" } },
+              "Status": { "status": { "name": "未着手" } },
+              "Source": { "select": { "name": "GitHub" } },
+              "AutoSync": { "checkbox": true }
             }
           }
-          JSON
+          EOF
 
-          PAYLOAD=${PAYLOAD/DBID/$NOTION_DATABASE_ID}
-          PAYLOAD=${PAYLOAD/TITLE/${DATE} Daily Log (GitHub)}
-          PAYLOAD=${PAYLOAD/DATESTR/$DATE}
+          echo "=== Payload ==="
+          cat payload.json
+          echo "==============="
 
-          echo "— sending to Notion. date=$DATE"
-          echo "— Notion-Version=$NOTION_VERSION"
-          # レスポンス本文を保存し、HTTPコードも取得して可視化
-          HTTP_CODE=$(curl --fail-with-body -sS -o response.json -w "%{http_code}" \
+          HTTP_CODE=$(curl -v -sS -o response.json -w "%{http_code}" \
             -X POST "https://api.notion.com/v1/pages" \
-            -H "Authorization: Bearer $NOTION_TOKEN" \
-            -H "Notion-Version: $NOTION_VERSION" \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD" || true)
-
-          echo "— HTTP=$HTTP_CODE"
-          echo "— Response:"
-          cat response.json
-          # 2xx 以外なら失敗にする
-          [[ "$HTTP_CODE" =~ ^2 ]] || exit 1
+            -H "Authorization: Bearer ${NOTION_TOKEN}" \
             -H "Notion-Version: ${NOTION_VERSION}" \
             -H "Content-Type: application/json" \
-            -d "${BODY}"
+            -d @payload.json || true)
+
+          echo "HTTP code: $HTTP_CODE"
+          echo "Response:"
+          cat response.json
+
+          [[ "$HTTP_CODE" =~ ^2 ]] || exit 1
