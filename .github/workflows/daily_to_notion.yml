@@ -1,46 +1,58 @@
 name: Daily → Notion
+
 on:
-  workflow_dispatch:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "5 0 * * *"   # UTC 00:05 (= JST 09:05)
 
 jobs:
-  push:
+  post:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Post to Notion
+      - name: Post a daily log to Notion DB
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_VERSION: ${{ secrets.NOTION_VERSION }}
-          DBID: ${{ secrets.NOTION_DATABASE_ID }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+        shell: bash
         run: |
           set -euo pipefail
-          DATE=$(date -u +%Y-%m-%d)
-          TITLE="${DATE} Daily Log (GitHub)"
 
-          # Notion JSON（プロパティ名はあなたのDBに合わせて日本語）
-          read -r -d '' BODY <<'JSON'
+          DATE=$(date -u +%Y-%m-%d)
+
+          # JSON payload（DBの列名に合わせています）
+          read -r -d '' PAYLOAD <<'JSON'
           {
             "parent": { "database_id": "DBID" },
             "properties": {
               "Log Title": { "title": [ { "text": { "content": "TITLE" } } ] },
-              "日付":       { "date":  { "start": "DATE" } },
-              "Status":     { "status": { "name": "未着手" } },
-              "Source":     { "select": { "name": "GitHub" } },
-              "ProjectLink":{ "url": "https://github.com/Shiyoku-Galaxy/ganproject/actions" },
-              "AutoSync":   { "checkbox": true }
+              "Date":      { "date":  { "start": "DATESTR" } },
+              "Status":    { "status": { "name": "未着手" } },
+              "Source":    { "select": { "name": "GitHub" } },
+              "AutoSync":  { "checkbox": true }
             }
           }
           JSON
 
-          # 置換
-          BODY=${BODY/DBID/$DBID}
-          BODY=${BODY/TITLE/$TITLE}
-          BODY=${BODY/DATE/$DATE}
+          PAYLOAD=${PAYLOAD/DBID/$NOTION_DATABASE_ID}
+          PAYLOAD=${PAYLOAD/TITLE/${DATE} Daily Log (GitHub)}
+          PAYLOAD=${PAYLOAD/DATESTR/$DATE}
 
-          # 送信
-          curl -sS -X POST "https://api.notion.com/v1/pages" \
-            -H "Authorization: Bearer ${NOTION_TOKEN}" \
+          echo "— sending to Notion. date=$DATE"
+          echo "— Notion-Version=$NOTION_VERSION"
+          # レスポンス本文を保存し、HTTPコードも取得して可視化
+          HTTP_CODE=$(curl --fail-with-body -sS -o response.json -w "%{http_code}" \
+            -X POST "https://api.notion.com/v1/pages" \
+            -H "Authorization: Bearer $NOTION_TOKEN" \
+            -H "Notion-Version: $NOTION_VERSION" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" || true)
+
+          echo "— HTTP=$HTTP_CODE"
+          echo "— Response:"
+          cat response.json
+          # 2xx 以外なら失敗にする
+          [[ "$HTTP_CODE" =~ ^2 ]] || exit 1
             -H "Notion-Version: ${NOTION_VERSION}" \
             -H "Content-Type: application/json" \
             -d "${BODY}"
