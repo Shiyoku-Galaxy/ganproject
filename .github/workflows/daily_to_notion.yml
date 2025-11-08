@@ -1,41 +1,46 @@
 name: Daily → Notion
-
 on:
-  workflow_dispatch: {}           # 手動実行ボタン
-  schedule:
-    - cron: "5 0 * * *"           # UTC 00:05 (= JST 09:05)
+  workflow_dispatch:
 
 jobs:
-  post:
+  push:
     runs-on: ubuntu-latest
     steps:
-      - name: Post a daily log to Notion DB
+      - uses: actions/checkout@v4
+
+      - name: Post to Notion
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_VERSION: ${{ secrets.NOTION_VERSION }}
-          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          DBID: ${{ secrets.NOTION_DATABASE_ID }}
         run: |
+          set -euo pipefail
           DATE=$(date -u +%Y-%m-%d)
+          TITLE="${DATE} Daily Log (GitHub)"
 
-          read -r -d '' PAYLOAD <<'JSON'
+          # Notion JSON（プロパティ名はあなたのDBに合わせて日本語）
+          read -r -d '' BODY <<'JSON'
           {
             "parent": { "database_id": "DBID" },
             "properties": {
               "Log Title": { "title": [ { "text": { "content": "TITLE" } } ] },
-              "Date":      { "date":  { "start": "DATESTR" } },
-              "Status":    { "status": { "name": "Open" } },
-              "Source":    { "select": { "name": "GitHub" } },
-              "AutoSync":  { "checkbox": true }
+              "日付":       { "date":  { "start": "DATE" } },
+              "Status":     { "status": { "name": "未着手" } },
+              "Source":     { "select": { "name": "GitHub" } },
+              "ProjectLink":{ "url": "https://github.com/Shiyoku-Galaxy/ganproject/actions" },
+              "AutoSync":   { "checkbox": true }
             }
           }
           JSON
 
-          PAYLOAD=${PAYLOAD/DBID/$NOTION_DATABASE_ID}
-          PAYLOAD=${PAYLOAD/TITLE/"$DATE Daily Log (GitHub)"}
-          PAYLOAD=${PAYLOAD/DATESTR/$DATE}
+          # 置換
+          BODY=${BODY/DBID/$DBID}
+          BODY=${BODY/TITLE/$TITLE}
+          BODY=${BODY/DATE/$DATE}
 
+          # 送信
           curl -sS -X POST "https://api.notion.com/v1/pages" \
-            -H "Authorization: Bearer $NOTION_TOKEN" \
-            -H "Notion-Version: $NOTION_VERSION" \
+            -H "Authorization: Bearer ${NOTION_TOKEN}" \
+            -H "Notion-Version: ${NOTION_VERSION}" \
             -H "Content-Type: application/json" \
-            -d "$PAYLOAD"
+            -d "${BODY}"
